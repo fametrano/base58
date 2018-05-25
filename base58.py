@@ -14,8 +14,8 @@ from hashlib import sha256
 __version__ = '0.2.5'
 
 # 58 character alphabet used
-alphabet = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-
+__alphabet = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+__base = len(__alphabet)
 
 if bytes == str:  # python2
     iseq, bseq, buffer = (
@@ -46,11 +46,12 @@ def scrub_input(v):
 def b58encode_int(i, default_one=True):
     '''Encode an integer using Base58'''
     if not i and default_one:
-        return alphabet[0:1]
+        return __alphabet[0:1]
     string = b""
-    while i:
-        i, idx = divmod(i, 58)
-        string = alphabet[idx:idx+1] + string
+    while i >= __base:
+        i, idx = divmod(i, __base)
+        string = __alphabet[idx:idx+1] + string
+    string = __alphabet[i:i+1] + string
     return string
 
 
@@ -59,6 +60,7 @@ def b58encode(v):
 
     v = scrub_input(v)
 
+    # leading-0s will become leading-1s
     nPad = len(v)
     v = v.lstrip(b'\0')
     nPad -= len(v)
@@ -70,7 +72,8 @@ def b58encode(v):
 
     result = b58encode_int(acc, default_one=False)
 
-    return (alphabet[0:1] * nPad + result)
+    # adding leading-1s
+    return (__alphabet[0:1] * nPad + result)
 
 
 def b58decode_int(v):
@@ -80,7 +83,7 @@ def b58decode_int(v):
 
     decimal = 0
     for char in v:
-        decimal = decimal * 58 + alphabet.index(char)
+        decimal = decimal * __base + __alphabet.index(char)
     return decimal
 
 
@@ -89,18 +92,21 @@ def b58decode(v):
 
     v = scrub_input(v)
 
-    origlen = len(v)
-    v = v.lstrip(alphabet[0:1])
-    newlen = len(v)
+    # leading-1s will become leading-0s
+    nPad = len(v)
+    v = v.lstrip(__alphabet[0:1])
+    nPad -= len(v)
 
     acc = b58decode_int(v)
 
     result = []
-    while acc > 0:
+    while acc >= 256:
         acc, mod = divmod(acc, 256)
         result.append(mod)
+    result.append(acc)
 
-    return (b'\0' * (origlen - newlen) + bseq(reversed(result)))
+    # adding leading-0s
+    return (b'\0' * nPad + bseq(reversed(result)))
 
 
 def b58encode_check(v):
@@ -123,50 +129,69 @@ def b58decode_check(v):
     return result
 
 
-def main():
-    '''Base58 encode or decode FILE, or standard input, to standard output.'''
+# https://en.bitcoin.it/wiki/Wallet_import_format
+privKey = 0xC28FCA386C7A227600B2FE50B7CAE11EC86D3BF1FBE471BE89827E19D72AA1D
+uncompressedExtKey = b'\x80' + privKey.to_bytes(32, byteorder='big')
+uncompressedWIF = b'5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ'
+compressedExtKey = b'\x80' + privKey.to_bytes(32, byteorder='big') + b'\x01'
+compressedWIF = b'KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617'
 
-    import sys
-    import argparse
+def test_privKey_to_wif():
+    wif = b58encode_check(uncompressedExtKey)
+    print(wif==uncompressedWIF)
+    #assert_that(wif, equal_to(uncompressedWIF))
+    wif = b58encode_check(compressedExtKey)
+    print(wif==compressedWIF)
+    #assert_that(wif, equal_to(compressedWIF))
+    
 
-    stdout = buffer(sys.stdout)
+def test_wif_to_privKey():
+    extKey = b58decode_check(uncompressedWIF)
+    print(extKey==uncompressedExtKey)
+    #assert_that(extKey, equal_to(uncompressedExtKey))
+    extKey = b58decode_check(compressedWIF)
+    print(extKey==compressedExtKey)
+    #assert_that(extKey, equal_to(compressedExtKey))
+    
 
-    parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument(
-        'file',
-        metavar='FILE',
-        nargs='?',
-        type=argparse.FileType('r'),
-        default='-')
-    parser.add_argument(
-        '-d', '--decode',
-        action='store_true',
-        help='decode data')
-    parser.add_argument(
-        '-c', '--check',
-        action='store_true',
-        help='append a checksum before encoding')
+if __name__ == "__main__":
+  print("### 1")
+  print(b58encode(b'hello world'))
+  print(b58decode(b'StV1DL6CwTryKyV').decode('ascii'))
+  print(b58decode(b58encode(b'hello world'))==b'hello world')
+  print(b58encode(b58decode(b'StV1DL6CwTryKyV'))==b'StV1DL6CwTryKyV')
 
-    args = parser.parse_args()
-    fun = {
-        (False, False): b58encode,
-        (False, True): b58encode_check,
-        (True, False): b58decode,
-        (True, True): b58decode_check
-    }[(args.decode, args.check)]
+  print("### 2")
+  print(b58encode("hello world"))
+  print(b58decode("StV1DL6CwTryKyV").decode('ascii'))
+  print(b58decode(b58encode("hello world"))==b'hello world')
+  print(b58encode(b58decode("StV1DL6CwTryKyV"))==b'StV1DL6CwTryKyV')
 
-    data = buffer(args.file).read()
+  print("### 3")
+  print(b58encode(b'\x00\x00hello world'))
+  print(b58decode(b'11StV1DL6CwTryKyV').decode('ascii'))
+  print(b58decode(b58encode(b'\0\0hello world'))==b'\0\0hello world')
+  print(b58encode(b58decode(b'11StV1DL6CwTryKyV'))==b'11StV1DL6CwTryKyV')
 
-    try:
-        result = fun(data)
-    except Exception as e:
-        sys.exit(e)
+  print("### 4")
+  print(b58encode("  hello world"))
+  print(b58decode("11StV1DL6CwTryKyV").decode('ascii'))
+  print(b58decode(b58encode("  hello world"))==b'\x00\x00hello world')
+  print(b58encode(b58decode("11StV1DL6CwTryKyV"))==b'11StV1DL6CwTryKyV')
 
-    if not isinstance(result, bytes):
-        result = result.encode('ascii')
+  print("### 5")
+  print(b58encode(b'')=='')
+  print(b58encode('')=='')
+  print(b58decode('1')==b'\0')
+  print(b58decode(b'1')==b'\0')
 
-    stdout.write(result)
+  print("### tests")
+  test_privKey_to_wif()
+  test_wif_to_privKey()
 
+  print("### spaces")
+  print("  hello world"==b'\0\0hello world'.decode('ascii'))
+  print("  hello world"==b'\00\00hello world'.decode('ascii'))
+  print("  hello world"==b'\x00\x00hello world'.decode('ascii'))
 
-if __name__ == '__main__':
-    main()
+  print(__base)
